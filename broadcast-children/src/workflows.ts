@@ -57,19 +57,21 @@ export async function parentWorkflow(...names: string[]): Promise<string> {
   while (true) {
     await condition(() => decisions.length > lastLength);
 
-    // todo: handle multiple signals received at the same time.
-    const newDecision = decisions[decisions.length - 1];
+    // Handle multiple decisions received at the same time
+    for (let i = lastLength; i < decisions.length; i++) {
+      const newDecision = decisions[i];
 
-    // update child with the new decision
-    const child = children.find(c => c.name === newDecision.name);
-    if (child) {
-      child.decision = newDecision.decision;
+      // update child with the new decision
+      const child = children.find(c => c.name === newDecision.name);
+      if (child) {
+        child.decision = newDecision.decision;
+      }
+
+      // Send signal to all children
+      await Promise.all(
+        children.map(child => child.handle.signal(broadcastSignal, `${newDecision.name} has made a decision: ${newDecision.decision}`))
+      );
     }
-
-    // Send signal to all children
-    await Promise.all(
-      children.map(child => child.handle.signal(broadcastSignal, `${newDecision.name} has made a decision: ${newDecision.decision}`))
-    );
 
     lastLength = decisions.length;
   }
