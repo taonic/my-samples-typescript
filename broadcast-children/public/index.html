@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Broadcast Children UI</title>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    .container { max-width: 800px; }
+    .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; }
+    input, button { margin: 5px; padding: 8px; }
+    button { background: #007cba; color: white; border: none; cursor: pointer; }
+    .children { margin-top: 10px; }
+    .child { padding: 5px; background: #f5f5f5; margin: 2px 0; }
+    .approve { color: #28a745; font-weight: bold; }
+    .reject { color: #dc3545; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="container">
+      <h1>Broadcast Children Control</h1>
+      
+      <div class="section">
+        <h3>Start New Workflow</h3>
+        <input v-model="newWorkflowId" placeholder="Workflow ID">
+        <input v-model="initialChildren" placeholder="Child names (comma separated)">
+        <button @click="startWorkflow">Start Workflow</button>
+      </div>
+
+      <div class="section">
+        <h3>Workflow ID</h3>
+        <input v-model="workflowId" placeholder="Enter parent workflow ID">
+        <button @click="getChildren">Load</button>
+      </div>
+
+      <div class="section">
+        <h3>Add New Child</h3>
+        <input v-model="newChildName" placeholder="Child name">
+        <button @click="addChild">Add Child</button>
+      </div>
+
+
+
+      <div class="section">
+        <h3>Children Status</h3>
+        <button @click="getChildren">Refresh</button>
+        <div class="children">
+          <div v-for="child in children" :key="child.name" class="child">
+            <a :href="`/child.html?parent=${workflowId}&child=${child.name}`" target="_blank">
+              {{ child.name }}
+            </a>: 
+            <span :class="{ approve: child.decision === 'approve', reject: child.decision === 'reject' }">
+              {{ child.decision || 'No decision' }}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="message" class="section">
+        <strong>{{ message }}</strong>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const { createApp } = Vue;
+    
+    createApp({
+      data() {
+        return {
+          workflowId: '',
+          newWorkflowId: '',
+          initialChildren: '',
+          newChildName: '',
+
+          children: [],
+          message: '',
+          pollInterval: null
+        }
+      },
+      watch: {
+        workflowId(newId) {
+          if (newId) {
+            this.startPolling();
+          } else {
+            this.stopPolling();
+          }
+        }
+      },
+      methods: {
+        async addChild() {
+          try {
+            const response = await fetch('/add-child', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                parentWorkflowId: this.workflowId,
+                childName: this.newChildName
+              })
+            });
+            const result = await response.json();
+            this.message = result.message;
+            this.newChildName = '';
+            this.getChildren();
+          } catch (error) {
+            this.message = 'Error: ' + error.message;
+          }
+        },
+
+        async getChildren() {
+          if (!this.workflowId) return;
+          try {
+            const response = await fetch(`/children/${this.workflowId}`);
+            const result = await response.json();
+            this.children = result.children || [];
+          } catch (error) {
+            this.message = 'Error: ' + error.message;
+          }
+        },
+        startPolling() {
+          if (this.pollInterval) clearInterval(this.pollInterval);
+          this.pollInterval = setInterval(() => this.getChildren(), 2000);
+        },
+        stopPolling() {
+          if (this.pollInterval) {
+            clearInterval(this.pollInterval);
+            this.pollInterval = null;
+          }
+        },
+        async startWorkflow() {
+          try {
+            const childNames = this.initialChildren.split(',').map(name => name.trim()).filter(name => name);
+            const response = await fetch('/start-workflow', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                workflowId: this.newWorkflowId,
+                childNames
+              })
+            });
+            const result = await response.json();
+            this.message = `Workflow started: ${result.workflowId}`;
+            this.workflowId = result.workflowId;
+            this.newWorkflowId = '';
+            this.initialChildren = '';
+            this.getChildren();
+          } catch (error) {
+            this.message = 'Error: ' + error.message;
+          }
+        }
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>

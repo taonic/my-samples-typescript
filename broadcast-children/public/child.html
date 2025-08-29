@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Child Decision</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; text-align: center; }
+    .container { max-width: 600px; margin: 0 auto; }
+    button { margin: 10px; padding: 15px 30px; font-size: 16px; border: none; cursor: pointer; }
+    .approve { background: #28a745; color: white; }
+    .reject { background: #dc3545; color: white; }
+    .message { margin: 20px 0; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1 id="childName"></h1>
+    <p>Make your decision:</p>
+    <button class="approve" onclick="sendDecision('approve')">Approve</button>
+    <button class="reject" onclick="sendDecision('reject')">Reject</button>
+    <div id="message" class="message"></div>
+    <table id="broadcastMessages" style="margin-top: 20px; width: 100%; border-collapse: collapse; overflow-y: auto;">
+      <thead><tr><th style="border: 1px solid #ccc; padding: 8px;">Time</th><th style="border: 1px solid #ccc; padding: 8px;">Message</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const parentWorkflowId = params.get('parent');
+    const childName = params.get('child');
+    
+    document.getElementById('childName').textContent = childName;
+    
+    async function sendDecision(decision) {
+      try {
+        const response = await fetch('/decision', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            parentWorkflowId,
+            childName,
+            decision
+          })
+        });
+        const result = await response.json();
+        document.getElementById('message').textContent = result.message;
+      } catch (error) {
+        document.getElementById('message').textContent = 'Error: ' + error.message;
+      }
+    }
+
+    async function pollBroadcastMessages() {
+      try {
+        const response = await fetch(`/query?workflowId=${parentWorkflowId}-${childName}&queryType=getBroadcastMessages`);
+        const messages = await response.json();
+        const tbody = document.querySelector('#broadcastMessages tbody');
+        tbody.innerHTML = messages.map(m => 
+          `<tr><td style="border: 1px solid #ccc; padding: 8px;">${new Date(m.timestamp).toUTCString()}</td><td style="border: 1px solid #ccc; padding: 8px;">${m.msg}</td></tr>`
+        ).join('');
+      } catch (error) {
+        console.error('Error polling messages:', error);
+      }
+    }
+
+    setInterval(pollBroadcastMessages, 2000);
+    pollBroadcastMessages();
+  </script>
+</body>
+</html>

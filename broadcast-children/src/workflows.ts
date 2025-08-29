@@ -18,6 +18,7 @@ export const decisionSignal = defineSignal<[string]>('decision');
 export const parentDecisionSignal = defineSignal<[ChildDecision]>('parentDecision');
 export const startNewChild = defineSignal<[string]>('startNewChild');
 export const getChildrenQuery = defineQuery<ChildDecision[]>('getChildren');
+export const getBroadcastMessagesQuery = defineQuery<Array<{msg: string, timestamp: Date}>>('getBroadcastMessages');
 
 export async function parentWorkflow(...names: string[]): Promise<string> {
   const children = await Promise.all(
@@ -76,12 +77,16 @@ export async function parentWorkflow(...names: string[]): Promise<string> {
 
 export async function childWorkflow(name: string): Promise<{ decision: string }> {
   let newDecision = '';
+  const broadcastMessages: Array<{msg: string, timestamp: Date}> = [];
   
   const parentHandle = getExternalWorkflowHandle(workflowInfo().parent!.workflowId);
   
   setHandler(broadcastSignal, (msg: string) => {
+    broadcastMessages.push({ msg, timestamp: new Date() });
     console.log(`Child ${name} received: ${msg}`);
   });
+  
+  setHandler(getBroadcastMessagesQuery, () => broadcastMessages);
   
   setHandler(decisionSignal, (dec: string) => {
     newDecision = dec;
