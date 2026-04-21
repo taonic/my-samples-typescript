@@ -1,7 +1,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const client_1 = require("@temporalio/client");
+const common_1 = require("@temporalio/common");
 const workflows_1 = require("./workflows");
+const LoanStatusKey = (0, common_1.defineSearchAttributeKey)('LoanStatus', 'KEYWORD');
+const FailedActivityKey = (0, common_1.defineSearchAttributeKey)('FailedActivity', 'KEYWORD');
 const scenarios = [
     {
         name: 'Clean — all activities pass',
@@ -87,11 +90,81 @@ const scenarios = [
             downPayment: 44000,
         },
     },
+    {
+        name: 'Multi-issue — bad employer + invalid address + missing property ID',
+        application: {
+            applicationId: 'LOAN-007',
+            applicantName: 'Grace Lee',
+            ssn: '777-88-9999',
+            employerName: 'UNKNOWN_EMPLOYER',
+            annualIncome: 92000,
+            propertyAddress: 'INVALID_ADDRESS',
+            propertyId: 'MISSING',
+            loanAmount: 300000,
+            downPayment: 60000,
+        },
+    },
+    {
+        name: 'Multi-issue — bad SSN + high DTI',
+        application: {
+            applicationId: 'LOAN-008',
+            applicantName: 'Henry Park',
+            ssn: '000-00-0000',
+            employerName: 'MegaCorp',
+            annualIncome: 50000,
+            propertyAddress: '55 River Rd, Brockway',
+            propertyId: 'PROP-008',
+            loanAmount: 480000,
+            downPayment: 5000,
+        },
+    },
+    {
+        name: 'Multi-issue — bad employer + bad SSN + invalid address + high DTI',
+        application: {
+            applicationId: 'LOAN-009',
+            applicantName: 'Irene Tanaka',
+            ssn: '000-00-0000',
+            employerName: 'UNKNOWN_EMPLOYER',
+            annualIncome: 40000,
+            propertyAddress: 'INVALID_ADDRESS',
+            propertyId: 'PROP-009',
+            loanAmount: 600000,
+            downPayment: 5000,
+        },
+    },
+    {
+        name: 'Saga — OFAC hit at underwrite, auto-rolls back through credit/appraisal/title',
+        application: {
+            applicationId: 'LOAN-010',
+            applicantName: 'Judy Reed',
+            ssn: '999-12-3456',
+            employerName: 'MegaBank',
+            annualIncome: 140000,
+            propertyAddress: '88 Cedar Ct, Capital City',
+            propertyId: 'PROP-010',
+            loanAmount: 420000,
+            downPayment: 84000,
+        },
+    },
+    {
+        name: 'Saga — OFAC hit + stuck appraiser vendor during rollback (needs compensation fix)',
+        application: {
+            applicationId: 'LOAN-011',
+            applicantName: 'Kevin Liu',
+            ssn: '999-77-8888',
+            employerName: 'DataCore',
+            annualIncome: 125000,
+            propertyAddress: 'APPRAISER_OFFLINE 42 Ridge Dr',
+            propertyId: 'PROP-011',
+            loanAmount: 380000,
+            downPayment: 76000,
+        },
+    },
 ];
 async function run() {
     const connection = await client_1.Connection.connect({ address: 'localhost:7233' });
     const client = new client_1.Client({ connection });
-    const batch = Math.floor(Date.now() / 1000).toString(36).slice(-6); // 6-char alphanumeric
+    const batch = Array.from({ length: 6 }, () => '0123456789abcdefghijklmnopqrstuvwxyz'[Math.random() * 36 | 0]).join('');
     console.log(`Starting ${scenarios.length} loan workflows (batch ${batch})...\n`);
     for (const scenario of scenarios) {
         const workflowId = `${scenario.application.applicationId}-${batch}`;
@@ -100,10 +173,10 @@ async function run() {
             taskQueue: 'recoverable-activity',
             workflowId,
             args: [application],
-            searchAttributes: {
-                LoanStatus: ['STARTED'],
-                FailedActivity: [''],
-            },
+            typedSearchAttributes: [
+                { key: LoanStatusKey, value: 'STARTED' },
+                { key: FailedActivityKey, value: '' },
+            ],
         });
         console.log(`Started: ${handle.workflowId} — ${scenario.name}`);
     }

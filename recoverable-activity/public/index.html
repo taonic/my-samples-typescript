@@ -209,6 +209,9 @@
     .badge-completed   { background: rgba(52,211,153,0.15); color: var(--temporal-green); }
     .badge-running     { background: rgba(96,165,250,0.15); color: var(--temporal-blue); }
     .badge-failed      { background: rgba(248,113,113,0.15); color: var(--temporal-red); }
+    .badge-compensating       { background: rgba(251,146,60,0.18); color: #fb923c; }
+    .badge-rolled-back        { background: rgba(156,163,175,0.18); color: var(--temporal-text-dim); }
+    .badge-rollback-pending   { background: rgba(251,146,60,0.18); color: #fb923c; }
 
     .failed-activity {
       color: var(--temporal-red);
@@ -235,6 +238,9 @@
     .pipeline-step.done { background: var(--temporal-green); color: #000; }
     .pipeline-step.fail { background: var(--temporal-red); color: #fff; animation: pulse 1.5s infinite; }
     .pipeline-step.pending { background: var(--temporal-border); color: var(--temporal-text-dim); }
+    .pipeline-step.compensated { background: #4b5563; color: var(--temporal-text-dim); text-decoration: line-through; }
+    .pipeline-step.compensating { background: #fb923c; color: #000; animation: pulse 1.5s infinite; }
+    .pipeline-step.rollback-fail { background: #7c2d12; color: #fdba74; border: 1.5px solid #fb923c; animation: pulse 1.5s infinite; }
     .pipeline-arrow { color: var(--temporal-border); font-size: 10px; }
     .pipeline-step[data-tooltip]:hover::after {
       content: attr(data-tooltip);
@@ -359,6 +365,46 @@
       font-family: 'SF Mono', 'Fira Code', monospace;
       word-break: break-word;
     }
+    .error-box.rollback {
+      background: rgba(251,146,60,0.08);
+      border-color: rgba(251,146,60,0.3);
+      color: #fb923c;
+    }
+
+    /* Rollback reason banner */
+    .rollback-banner {
+      background: rgba(251,146,60,0.08);
+      border: 1px solid rgba(251,146,60,0.3);
+      border-radius: 6px;
+      padding: 10px 14px;
+      margin-top: 12px;
+      font-size: 13px;
+      color: #fdba74;
+    }
+    .rollback-banner strong { color: #fb923c; }
+
+    /* Cancel action button */
+    .btn-danger {
+      background: rgba(248,113,113,0.1);
+      color: var(--temporal-red);
+      border: 1px solid rgba(248,113,113,0.3);
+      padding: 9px 18px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-danger:hover:not(:disabled) {
+      background: var(--temporal-red);
+      color: #fff;
+      border-color: var(--temporal-red);
+    }
+    .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Compensation history uses fix-history styling with amber accent */
+    .compensation-history h4 { color: #fb923c; }
+    .compensation-history .comp-action { color: #fb923c; }
 
     /* Success toast */
     .toast {
@@ -561,8 +607,8 @@
         <rect width="32" height="32" rx="6" fill="#7c3aed"/>
         <path d="M8 16h6l2-5 3 10 2-5h3" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
-      <span class="header-title">Recoverable Activity Demo</span>
-      <span class="header-subtitle">Home Loan Processing Pipeline</span>
+      <span class="header-title">AUSIEX Temporal Demo</span>
+      <span class="header-subtitle">Loan Origination</span>
     </div>
 
     <div class="container">
@@ -584,6 +630,10 @@
           <div class="stat-value" style="color: var(--temporal-green)">{{ completedCount }}</div>
           <div class="stat-label">Completed</div>
         </div>
+        <div class="stat-card" :class="{ active: statFilter === 'rolledback' }" @click="filterByStat('rolledback')">
+          <div class="stat-value" style="color: #fb923c">{{ rolledBackCount }}</div>
+          <div class="stat-label">Rolled Back</div>
+        </div>
       </div>
 
       <!-- Search / Filter -->
@@ -604,6 +654,9 @@
           <option value="TITLE_SEARCHED">TITLE_SEARCHED</option>
           <option value="UNDERWRITTEN">UNDERWRITTEN</option>
           <option value="CLOSED">CLOSED</option>
+          <option value="COMPENSATING">COMPENSATING</option>
+          <option value="ROLLBACK_PENDING_FIX">ROLLBACK_PENDING_FIX</option>
+          <option value="ROLLED_BACK">ROLLED_BACK</option>
         </select>
         <button v-if="filterActivity || filterStatus" class="btn-clear" @click="clearFilters">Clear filters</button>
         <div style="margin-left: auto; display: flex; gap: 10px;">
@@ -763,8 +816,7 @@
                       style="width: 22px; height: 22px; font-size: 11px;">
                   {{ i + 1 }}
                 </span>
-                <span style="font-size: 13px;"
-                      :style="{ color: stepClass(selected, step.id) === 'fail' ? 'var(--temporal-red)' : stepClass(selected, step.id) === 'done' ? 'var(--temporal-green)' : 'var(--temporal-text-dim)' }">
+                <span style="font-size: 13px;" :style="stepLabelStyle(selected, step.id)">
                   {{ step.label }}
                 </span>
               </div>
@@ -802,9 +854,19 @@
             </div>
           </div>
 
-          <!-- Error display -->
-          <div v-if="selected.state?.failureMessage" class="error-box">
+          <!-- Error display (red for forward, amber for rollback) -->
+          <div v-if="selected.state?.failureMessage"
+               :class="['error-box', selected.state?.status === 'ROLLBACK_PENDING_FIX' ? 'rollback' : '']">
             {{ selected.state.failureMessage }}
+          </div>
+
+          <!-- Rollback reason banner (shows when saga unwind was triggered) -->
+          <div v-if="selected.state?.cancelReason && isRollbackState(selected.state.status)"
+               class="rollback-banner">
+            <div><strong>Rollback reason:</strong> {{ selected.state.cancelReason }}</div>
+            <div v-if="selected.state?.notificationMessage" style="margin-top: 6px;">
+              <strong>Applicant notified:</strong> {{ selected.state.notificationMessage }}
+            </div>
           </div>
 
           <!-- Fix history -->
@@ -830,7 +892,56 @@
             </table>
           </div>
 
-          <!-- Fix section -->
+          <!-- Compensation history (saga unwind audit trail) -->
+          <div class="fix-history compensation-history" v-if="selected.state?.compensationHistory?.length">
+            <h4>Compensation History</h4>
+            <table>
+              <thead>
+                <tr>
+                  <th>Forward Activity</th>
+                  <th>Compensation</th>
+                  <th>Result</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(c, i) in selected.state.compensationHistory" :key="i">
+                  <td class="mono">{{ c.forwardActivity }}</td>
+                  <td class="mono comp-action">{{ c.compensationActivity }}</td>
+                  <td>{{ c.result }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Cancel-application action (triggers saga rollback) -->
+          <div class="fix-section" v-if="showCancelButton && !cancelFormOpen">
+            <h4 style="color: var(--temporal-red);">Withdraw Application</h4>
+            <div style="font-size: 12px; color: var(--temporal-text-dim); margin-bottom: 10px;">
+              Runs compensation activities in reverse order to undo side effects
+              ({{ compensatableCount }} step{{ compensatableCount === 1 ? '' : 's' }} with effects so far).
+            </div>
+            <button class="btn-danger" @click="cancelFormOpen = true">
+              Cancel Application (Trigger Rollback)
+            </button>
+          </div>
+          <div class="fix-section" v-if="cancelFormOpen">
+            <h4 style="color: var(--temporal-red);">Cancel and Roll Back</h4>
+            <div class="fix-form">
+              <div class="field" style="flex: 1; min-width: 260px;">
+                <label>Reason (required)</label>
+                <input v-model="cancelInput" placeholder="e.g. Applicant withdrew offer"
+                       @keyup.enter="sendCancel">
+              </div>
+              <button class="btn-danger" @click="sendCancel" :disabled="!cancelInput">
+                Send Cancellation
+              </button>
+              <button class="btn-cancel" @click="cancelFormOpen = false; cancelInput = ''">
+                Dismiss
+              </button>
+            </div>
+          </div>
+
+          <!-- Forward fix section -->
           <div class="fix-section" v-if="selected.state?.status === 'PENDING_FIX'">
             <h4>Send Fix via Signal</h4>
             <div v-if="suggestedFix" class="fix-hint">
@@ -862,6 +973,41 @@
               </div>
               <button class="btn-fix" @click="sendFix" :disabled="!fixKey || !fixValue">
                 Patch and Retry
+              </button>
+            </div>
+          </div>
+
+          <!-- Rollback fix section (compensation stuck — patch and/or retry) -->
+          <div class="fix-section" v-if="selected.state?.status === 'ROLLBACK_PENDING_FIX'">
+            <h4 style="color: #fb923c;">Retry Compensation</h4>
+            <div v-if="suggestedFix" class="fix-hint" style="background: rgba(251,146,60,0.08); border-color: rgba(251,146,60,0.3); color: #fdba74;">
+              Compensation <strong>{{ stuckCompensationName }}</strong> is blocked.
+              Patch <strong>{{ suggestedFix.key }}</strong> (currently
+              <code style="color: var(--temporal-red)">{{ selected.state.application[suggestedFix.key] }}</code>)
+              <span v-if="suggestedFix.hint">— try <code style="color: var(--temporal-green)">{{ suggestedFix.hint }}</code></span>,
+              or just retry if the vendor is back.
+            </div>
+            <div class="fix-form">
+              <div class="field">
+                <label>Field to patch (optional)</label>
+                <select v-model="fixKey">
+                  <option value="">(none — just retry)</option>
+                  <option value="propertyAddress">propertyAddress</option>
+                  <option value="propertyId">propertyId</option>
+                </select>
+              </div>
+              <div class="field" v-if="fixKey && selected.state">
+                <label>Current Value</label>
+                <div class="mono" style="padding: 8px 0; color: var(--temporal-red);">{{ selected.state.application[fixKey] }}</div>
+              </div>
+              <div class="field" v-if="fixKey">
+                <label>New Value</label>
+                <input v-model="fixValue" placeholder="Enter corrected value"
+                       @keyup.enter="sendFix">
+              </div>
+              <button class="btn-fix" @click="sendFix" :disabled="fixKey && !fixValue"
+                      style="background: #fb923c;">
+                {{ fixKey ? 'Patch and Retry' : 'Retry Compensation' }}
               </button>
             </div>
           </div>
@@ -906,6 +1052,9 @@
           modalPolling: false,
           modalPollTimer: null,
           prevCompletedCount: 0,
+          prevStatus: '',
+          cancelFormOpen: false,
+          cancelInput: '',
           activityNames: [
             'verifyIncome',
             'runCreditCheck',
@@ -921,47 +1070,95 @@
             { id: 'performTitleSearch', label: 'Title Search' },
             { id: 'underwrite', label: 'Underwriting' },
             { id: 'closeLoan', label: 'Close Loan' },
+          ],
+          // Steps with external side effects — these register a compensation.
+          // verifyIncome is read-only, so it has no compensation to run.
+          stepsWithCompensation: [
+            'runCreditCheck',
+            'orderAppraisal',
+            'performTitleSearch',
+            'underwrite',
+            'closeLoan',
           ]
         };
       },
       computed: {
         pendingFixCount() {
-          return this.allWorkflows.filter(w =>
-            (w.loanStatus || w.state?.status) === 'PENDING_FIX'
-          ).length;
+          return this.allWorkflows.filter(w => {
+            const ls = w.loanStatus || w.state?.status;
+            return ls === 'PENDING_FIX' || ls === 'ROLLBACK_PENDING_FIX';
+          }).length;
         },
         runningCount() {
-          return this.allWorkflows.filter(w =>
-            w.wfStatus === 'RUNNING' && (w.loanStatus || w.state?.status) !== 'PENDING_FIX'
-          ).length;
+          return this.allWorkflows.filter(w => {
+            const ls = w.loanStatus || w.state?.status;
+            return w.wfStatus === 'RUNNING' &&
+                   ls !== 'PENDING_FIX' && ls !== 'ROLLBACK_PENDING_FIX';
+          }).length;
         },
         completedCount() {
-          return this.allWorkflows.filter(w =>
-            w.wfStatus === 'COMPLETED' || (w.loanStatus || w.state?.status) === 'CLOSED'
-          ).length;
+          return this.allWorkflows.filter(w => {
+            const ls = w.loanStatus || w.state?.status;
+            return ls === 'CLOSED';
+          }).length;
+        },
+        rolledBackCount() {
+          return this.allWorkflows.filter(w => {
+            const ls = w.loanStatus || w.state?.status;
+            return ls === 'ROLLED_BACK';
+          }).length;
         },
         workflows() {
           if (this.statFilter === 'all') return this.allWorkflows;
           return this.allWorkflows.filter(w => {
             const ls = w.loanStatus || w.state?.status;
-            if (this.statFilter === 'pending') return ls === 'PENDING_FIX';
-            if (this.statFilter === 'running') return w.wfStatus === 'RUNNING' && ls !== 'PENDING_FIX';
-            if (this.statFilter === 'completed') return w.wfStatus === 'COMPLETED' || ls === 'CLOSED';
+            if (this.statFilter === 'pending') return ls === 'PENDING_FIX' || ls === 'ROLLBACK_PENDING_FIX';
+            if (this.statFilter === 'running') return w.wfStatus === 'RUNNING' && ls !== 'PENDING_FIX' && ls !== 'ROLLBACK_PENDING_FIX';
+            if (this.statFilter === 'completed') return ls === 'CLOSED';
+            if (this.statFilter === 'rolledback') return ls === 'ROLLED_BACK';
             return true;
           });
         },
         suggestedFix() {
           if (!this.selected?.state?.failedActivity) return null;
-          const fixes = {
+          const fa = this.selected.state.failedActivity;
+          const status = this.selected.state.status;
+          // Which compensations need a field patch to proceed
+          const rollbackFixes = {
+            orderAppraisal: { key: 'propertyAddress', hint: '100 Main St, Anytown' },
+            performTitleSearch: { key: 'propertyId', hint: 'PROP-VALID' },
+          };
+          const forwardFixes = {
             verifyIncome: { key: 'employerName', hint: 'Acme Corp' },
             runCreditCheck: { key: 'ssn', hint: '123-45-6789' },
             orderAppraisal: { key: 'propertyAddress', hint: '100 Main St, Anytown' },
             performTitleSearch: { key: 'propertyId', hint: 'PROP-100' },
             underwrite: { key: 'downPayment', hint: '100000' },
           };
-          const fix = fixes[this.selected.state.failedActivity];
+          const fix = status === 'ROLLBACK_PENDING_FIX' ? rollbackFixes[fa] : forwardFixes[fa];
           if (fix) this.fixKey = fix.key;
           return fix || null;
+        },
+        showCancelButton() {
+          if (this.selected?.wfStatus !== 'RUNNING') return false;
+          const s = this.selected?.state?.status;
+          return !!s && !['CLOSED', 'ROLLED_BACK', 'COMPENSATING', 'ROLLBACK_PENDING_FIX', 'FAILED'].includes(s);
+        },
+        compensatableCount() {
+          const completed = this.selected?.state?.completedActivities || [];
+          // verifyIncome has no side effects
+          return completed.filter(a => a !== 'verifyIncome').length;
+        },
+        stuckCompensationName() {
+          const map = {
+            runCreditCheck: 'withdrawCreditInquiry',
+            orderAppraisal: 'cancelAppraisal',
+            performTitleSearch: 'releaseTitleHold',
+            underwrite: 'releaseUnderwritingReservation',
+            closeLoan: 'reverseLoanClosure',
+          };
+          const fa = this.selected?.state?.failedActivity;
+          return map[fa] || 'compensation';
         },
       },
       methods: {
@@ -991,27 +1188,57 @@
           this.selected = wf;
           this.fixKey = '';
           this.fixValue = '';
+          this.cancelFormOpen = false;
+          this.cancelInput = '';
         },
         closeDetail() {
           this.stopModalPoll();
           this.selectedId = null;
           this.selected = null;
+          this.cancelFormOpen = false;
+          this.cancelInput = '';
         },
         async sendFix() {
-          if (!this.fixKey || !this.fixValue || !this.selectedId) return;
+          // During ROLLBACK_PENDING_FIX, key/value may be empty (pure retry)
+          const rollbackRetry = this.selected?.state?.status === 'ROLLBACK_PENDING_FIX' && !this.fixKey;
+          if (!rollbackRetry && (!this.fixKey || !this.fixValue) && this.selected?.state?.status !== 'ROLLBACK_PENDING_FIX') return;
+          if (!this.selectedId) return;
           try {
+            const body = rollbackRetry
+              ? { key: '', value: '' }
+              : { key: this.fixKey, value: this.fixValue };
             const res = await fetch(`/api/workflows/${this.selectedId}/fix`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ key: this.fixKey, value: this.fixValue }),
+              body: JSON.stringify(body),
             });
             const data = await res.json();
-            this.showToast(data.message || 'Fix signal sent');
+            this.showToast(data.message || 'Signal sent');
             this.fixValue = '';
             this.prevCompletedCount = this.selected?.state?.completedActivities?.length || 0;
+            this.prevStatus = this.selected?.state?.status || '';
             this.startModalPoll();
           } catch (e) {
-            this.showToast('Error sending fix: ' + e.message);
+            this.showToast('Error sending signal: ' + e.message);
+          }
+        },
+        async sendCancel() {
+          if (!this.cancelInput || !this.selectedId) return;
+          try {
+            const res = await fetch(`/api/workflows/${this.selectedId}/cancel`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ reason: this.cancelInput }),
+            });
+            const data = await res.json();
+            this.showToast(data.message || 'Cancellation sent');
+            this.cancelFormOpen = false;
+            this.cancelInput = '';
+            this.prevCompletedCount = this.selected?.state?.completedActivities?.length || 0;
+            this.prevStatus = this.selected?.state?.status || '';
+            this.startModalPoll();
+          } catch (e) {
+            this.showToast('Error cancelling: ' + e.message);
           }
         },
         startModalPoll() {
@@ -1038,15 +1265,18 @@
                 wfStatus: data.wfStatus,
                 state: data.state,
               };
-              // Stop polling once workflow progresses past the fix (new activity completed or hits next failure or completes)
-              const statusChanged = data.state.status !== 'PENDING_FIX' ||
-                newCount > this.prevCompletedCount;
-              if (statusChanged) {
+              // Stop conditions:
+              //  - Reached terminal state (CLOSED, ROLLED_BACK)
+              //  - Paused for human (PENDING_FIX, ROLLBACK_PENDING_FIX) AND has made progress since last fix
+              const terminal = ['CLOSED', 'ROLLED_BACK'].includes(data.state.status);
+              const paused = ['PENDING_FIX', 'ROLLBACK_PENDING_FIX'].includes(data.state.status);
+              const progressed = newCount > this.prevCompletedCount ||
+                                 data.state.status !== this.prevStatus;
+              if (terminal || (paused && progressed)) {
                 this.stopModalPoll();
                 this.loadWorkflows();
-                if (data.state.status === 'CLOSED') {
-                  this.showToast('Loan closed successfully!');
-                }
+                if (data.state.status === 'CLOSED') this.showToast('Loan closed successfully!');
+                if (data.state.status === 'ROLLED_BACK') this.showToast('Application rolled back');
               }
             }
           } catch {
@@ -1106,19 +1336,53 @@
         },
         stepClass(wf, stepId) {
           if (!wf.state) return 'pending';
-          if (wf.state.completedActivities.includes(stepId)) return 'done';
-          if (wf.state.failedActivity === stepId) return 'fail';
+          const s = wf.state;
+          const compensated = s.compensatedActivities || [];
+          const completed = s.completedActivities || [];
+          if (compensated.includes(stepId)) return 'compensated';
+          const rollbackPhase = this.isRollbackState(s.status);
+          if (rollbackPhase && s.failedActivity === stepId && completed.includes(stepId)) {
+            return s.status === 'ROLLBACK_PENDING_FIX' ? 'rollback-fail' : 'compensating';
+          }
+          // Read-only steps (no compensation registered) render as compensated during rollback —
+          // there is nothing to undo, but the whole pipeline is semantically rolled back.
+          if (rollbackPhase && completed.includes(stepId) && !this.stepsWithCompensation.includes(stepId)) {
+            return 'compensated';
+          }
+          if (completed.includes(stepId)) return 'done';
+          if (s.failedActivity === stepId && s.status === 'PENDING_FIX') return 'fail';
           return 'pending';
         },
         badgeClass(status) {
           if (!status) return '';
           const s = status.toUpperCase().replace(/ /g, '_');
           if (s === 'PENDING_FIX') return 'badge-pending-fix';
+          if (s === 'ROLLBACK_PENDING_FIX') return 'badge-rollback-pending';
+          if (s === 'COMPENSATING') return 'badge-compensating';
+          if (s === 'ROLLED_BACK') return 'badge-rolled-back';
           if (s === 'CLOSED') return 'badge-closed';
           if (s === 'COMPLETED') return 'badge-completed';
           if (s === 'RUNNING') return 'badge-running';
           if (s === 'FAILED') return 'badge-failed';
           return 'badge-started';
+        },
+        isRollbackState(status) {
+          return ['COMPENSATING', 'ROLLBACK_PENDING_FIX', 'ROLLED_BACK'].includes(status);
+        },
+        stepLabelStyle(wf, stepId) {
+          const cls = this.stepClass(wf, stepId);
+          const colors = {
+            fail: 'var(--temporal-red)',
+            done: 'var(--temporal-green)',
+            compensated: 'var(--temporal-text-dim)',
+            compensating: '#fb923c',
+            'rollback-fail': '#fdba74',
+            pending: 'var(--temporal-text-dim)',
+          };
+          return {
+            color: colors[cls] || 'var(--temporal-text-dim)',
+            textDecoration: cls === 'compensated' ? 'line-through' : 'none',
+          };
         },
         formatCurrency(n) {
           if (n == null) return '—';

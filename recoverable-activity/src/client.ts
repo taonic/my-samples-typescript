@@ -133,6 +133,34 @@ const scenarios: { name: string; application: LoanApplication }[] = [
       downPayment: 5000,
     },
   },
+  {
+    name: 'Saga — OFAC hit at underwrite, auto-rolls back through credit/appraisal/title',
+    application: {
+      applicationId: 'LOAN-010',
+      applicantName: 'Judy Reed',
+      ssn: '999-12-3456',
+      employerName: 'MegaBank',
+      annualIncome: 140000,
+      propertyAddress: '88 Cedar Ct, Capital City',
+      propertyId: 'PROP-010',
+      loanAmount: 420000,
+      downPayment: 84000,
+    },
+  },
+  {
+    name: 'Saga — OFAC hit + stuck appraiser vendor during rollback (needs compensation fix)',
+    application: {
+      applicationId: 'LOAN-011',
+      applicantName: 'Kevin Liu',
+      ssn: '999-77-8888',
+      employerName: 'DataCore',
+      annualIncome: 125000,
+      propertyAddress: 'APPRAISER_OFFLINE 42 Ridge Dr',
+      propertyId: 'PROP-011',
+      loanAmount: 380000,
+      downPayment: 76000,
+    },
+  },
 ];
 
 async function run() {

@@ -1,8 +1,8 @@
 import express from 'express';
 import { Connection, Client } from '@temporalio/client';
 import { defineSearchAttributeKey } from '@temporalio/common';
-import { homeLoanWorkflow, retrySignal, getStateQuery } from './workflows';
-import type { LoanApplication, RetryUpdate, LoanState } from './models';
+import { homeLoanWorkflow, retrySignal, cancelSignal, getStateQuery } from './workflows';
+import type { LoanApplication, RetryUpdate, LoanState, CancelRequest } from './models';
 
 const LoanStatusKey = defineSearchAttributeKey('LoanStatus', 'KEYWORD');
 const FailedActivityKey = defineSearchAttributeKey('FailedActivity', 'KEYWORD');
@@ -127,13 +127,26 @@ async function run() {
     }
   });
 
-  // Send retry signal with data fix
+  // Send retry signal with optional data fix (empty key = retry without patching)
   app.post('/api/workflows/:workflowId/fix', async (req, res) => {
     try {
       const { key, value } = req.body as RetryUpdate;
       const handle = client.workflow.getHandle(req.params.workflowId);
       await handle.signal(retrySignal, { key, value });
-      res.json({ success: true, message: `Fix sent: ${key} = ${value}` });
+      const msg = key ? `Fix sent: ${key} = ${value}` : 'Retry signal sent';
+      res.json({ success: true, message: msg });
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  // Cancel an in-flight application — triggers saga compensation unwind
+  app.post('/api/workflows/:workflowId/cancel', async (req, res) => {
+    try {
+      const { reason } = req.body as CancelRequest;
+      const handle = client.workflow.getHandle(req.params.workflowId);
+      await handle.signal(cancelSignal, { reason: reason || 'Cancelled by operator' });
+      res.json({ success: true, message: 'Cancellation signal sent — rolling back' });
     } catch (error) {
       res.status(500).json({ error: (error as Error).message });
     }

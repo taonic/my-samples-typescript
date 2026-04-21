@@ -19,6 +19,9 @@ export type LoanStatus =
   | 'UNDERWRITTEN'
   | 'CLOSED'
   | 'PENDING_FIX'
+  | 'COMPENSATING'
+  | 'ROLLBACK_PENDING_FIX'
+  | 'ROLLED_BACK'
   | 'FAILED';
 
 export type ActivityName =
@@ -37,16 +40,30 @@ export interface FixEntry {
   error: string;
 }
 
+export interface CompensationEntry {
+  forwardActivity: string;
+  compensationActivity: string;
+  result: string;
+}
+
 export interface LoanState {
   status: LoanStatus;
   failedActivity: string;
   failureMessage: string;
   completedActivities: string[];
+  compensatedActivities: string[];
   fixHistory: FixEntry[];
+  compensationHistory: CompensationEntry[];
   application: LoanApplication;
+  cancelReason: string;
+  notificationMessage: string;
 }
 
 export interface RetryUpdate {
-  key: keyof LoanApplication;
-  value: string;
+  key?: keyof LoanApplication | '';
+  value?: string;
+}
+
+export interface CancelRequest {
+  reason: string;
 }

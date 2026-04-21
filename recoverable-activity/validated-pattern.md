@@ -1,4 +1,4 @@
-# Keep Business Processes Moving by Fixing Errors Without Restarting
+# Keep Business Processes Moving by Recovering Failed Steps Without Restarting
 
 ## Metadata
 
@@ -39,9 +39,11 @@ The process picks up where it left off: completed steps do not re-execute, and t
 By completing this pattern, you will:
 
 - Pause a business process on a non-retryable failure and resume after correction without restarting from the beginning.
+- Unwind side-effecting steps through a LIFO **saga** compensation stack when forward progress is not possible — for example, a compliance block or an explicit cancellation from the applicant.
+- Recover from compensation failures using the same pause-and-fix loop so a stuck rollback does not leave the process in a partially unwound state.
 - Route blocked processes to the right human or automated agent using queryable Search Attributes.
 - Inspect the current state of any individual process or filter across all processes through a single API.
-- Maintain a complete audit trail of every data correction applied during the lifecycle of each process.
+- Maintain a complete audit trail of every data correction and every compensation applied during the lifecycle of each process.
 
 ## Background and Best Practices
 
@@ -51,15 +53,15 @@ The Workflow resumes where it left off when the condition becomes true, regardle
 This means thousands of loan applications can sit in a `PENDING_FIX` state simultaneously without consuming Worker capacity.
 
 The primary architectural challenge is distinguishing between transient failures that automated retries can resolve and permanent failures that require human intervention.
-Temporal addresses this with `ApplicationFailure.nonRetryable()`, which instructs the SDK to skip the retry policy and propagate the error to the Workflow code without delay.
-The Workflow then has full control over how to handle the failure: it can log the error, update Search Attributes for visibility, and suspend until a Signal arrives.
+Temporal addresses this with [`ApplicationFailure.nonRetryable()`](https://docs.temporal.io/references/failures#application-failure), which instructs the SDK to skip the retry policy and propagate the error to the Workflow code without delay.
+The Workflow then has full control over how to handle the failure: it can log the error, update Search Attributes for visibility, and suspend until a [Signal](https://docs.temporal.io/develop/typescript/message-passing#signals) arrives.
 
-Custom Search Attributes provide the mechanism for routing blocked Workflows to the correct resolution resource.
+Custom [Search Attributes](https://docs.temporal.io/visibility#search-attribute) provide the mechanism for routing blocked Workflows to the correct resolution resource.
 By upserting attributes like `LoanStatus` and `FailedActivity` at each state transition, you create a queryable index across all active Workflows.
 An operations dashboard can filter for `LoanStatus = 'PENDING_FIX' AND FailedActivity = 'runCreditCheck'` to show which applications need a credit-related data correction.
 This same query interface supports automated agents that poll for specific failure categories and apply corrections programmatically.
 
-Temporal Queries provide synchronous read access to the current state of any running Workflow.
+Temporal [Queries](https://docs.temporal.io/develop/typescript/message-passing#queries) provide synchronous read access to the current state of any running Workflow.
 Unlike Search Attributes, which expose denormalized metadata for cross-Workflow queries, Queries return the full internal state of a single execution.
 Together, Search Attributes and Queries give you both the aggregate view across your entire pipeline and the detailed view into any individual Workflow.
 
@@ -211,8 +213,8 @@ export interface RetryUpdate {
 ### Define the Activities
 
 Create functions that validate loan application data at each pipeline stage.
-Temporal Activities encapsulate these functions to provide timeout management and optional heartbeating.
-When an Activity encounters a permanent failure that automated retries cannot fix — whether invalid input data or a missing record such as an unresolvable property identifier in a title search — it throws `ApplicationFailure.nonRetryable()` to propagate the error to the Workflow without retrying.
+Temporal Activities automatically recover from transient failures — network timeouts, temporary service unavailability, rate limits — through their built-in [Retry Policy](https://docs.temporal.io/encyclopedia/retry-policies) and [timeout management](https://docs.temporal.io/develop/typescript/failure-detection#activity-timeouts).
+When an Activity encounters a permanent failure that retries cannot fix — invalid input data, a policy violation, or a missing record — it throws `ApplicationFailure.nonRetryable()` to bypass the Retry Policy and propagate the error directly to the Workflow.
 
 ```typescript
 // src/activities.ts
@@ -500,6 +502,112 @@ External systems can poll this Query to display real-time pipeline progress.
 By calling `upsertSearchAttributes` at every state transition, the Workflow maintains a denormalized index that the Temporal Visibility API can query across all active Workflows.
 This enables an operations dashboard to display aggregate statistics and filter by any combination of status and failed Activity.
 
+### Add Saga Compensation for Side-Effecting Steps
+
+Not every failure can be resolved by correcting input data.
+An OFAC match, a withdrawn offer, or a regulatory hold demands that the pipeline roll back rather than pause for a fix.
+This is where the [saga pattern](https://taonic.github.io/temporal-design-patterns/saga-pattern.html) comes in: each forward Activity that produces an external side effect — a credit bureau inquiry, an appraiser booking, a title company fee, a reserved lending slot, a funded loan — registers a compensating Activity **before** it executes.
+If the forward pipeline aborts, the Workflow unwinds the registered compensations in reverse order.
+
+The pattern has three key discipline points that the implementation must honor:
+
+1. **Register before execution.** Registering the compensation before the forward Activity runs means a partial side effect (the Activity started but crashed mid-completion) still gets unwound. This requires compensations to be idempotent — calling one for a forward step that never landed must be safe.
+2. **LIFO unwinding.** The last step to touch external state is the first to undo. In TypeScript this is expressed by pushing onto the front of the array with `unshift()` and iterating forward, or by iterating a `push()`-built array in reverse.
+3. **Recoverable compensation.** Compensations can fail — vendor APIs go down, external systems reject requests. Running each compensation through the same recoverable wrapper as forward steps means a stuck rollback pauses with `ROLLBACK_PENDING_FIX` and can be patched or retried by an operator.
+
+Extend the Workflow to register compensations alongside forward Activities:
+
+```typescript
+interface Compensation {
+  forwardActivity: string;
+  compensationActivity: string;
+  run: () => Promise<string>;
+}
+const compensations: Compensation[] = [];
+
+const runForward = async <T>(
+  activityName: string,
+  forward: () => Promise<T>,
+  compensation?: { name: string; fn: () => Promise<string> }
+): Promise<T> => {
+  if (cancelRequested) {
+    throw new Error(`Cancelled before ${activityName}: ${cancelReason}`);
+  }
+  // Register BEFORE execution — handles partial side effects if the Activity aborts mid-flight
+  if (compensation) {
+    compensations.unshift({
+      forwardActivity: activityName,
+      compensationActivity: compensation.name,
+      run: compensation.fn,
+    });
+  }
+  return recoverableStep(activityName, forward, 'forward');
+};
+```
+
+Two paths now trigger a rollback:
+
+**Explicit cancellation.** A `cancelApplication` Signal sets `cancelRequested = true` and wakes any paused `condition()`. The `recoverableStep` loop checks this flag on wake-up and throws out of the pause to the outer `try/catch`.
+
+**RollbackRequired failure type.** An Activity can throw `ApplicationFailure.nonRetryable(message, 'RollbackRequired')` to signal that no data correction will help — the application must be withdrawn. The Workflow catches this specific failure type and routes it to the compensation phase instead of the pause loop:
+
+```typescript
+export async function underwrite(
+  applicantName: string, ssn: string, ...
+): Promise<string> {
+  if (ssn.startsWith('999')) {
+    throw ApplicationFailure.nonRetryable(
+      `Compliance block: OFAC/sanctions match — application must be withdrawn`,
+      'RollbackRequired'
+    );
+  }
+  // ... normal DTI check
+}
+```
+
+The compensation loop runs in LIFO order through the same recoverable wrapper:
+
+```typescript
+try {
+  // ... forward pipeline: verifyIncome, runCreditCheck, orderAppraisal, ...
+} catch (err: any) {
+  const trigger = cancelReason || err.message || String(err);
+  updateStatus('COMPENSATING', '', trigger);
+
+  for (const comp of compensations) {
+    // Safe even without this check thanks to idempotency, but skipping keeps the audit clean
+    if (!completedActivities.includes(comp.forwardActivity)) continue;
+
+    const result = await recoverableStep(comp.forwardActivity, comp.run, 'compensation');
+    compensationHistory.push({
+      forwardActivity: comp.forwardActivity,
+      compensationActivity: comp.compensationActivity,
+      result,
+    });
+    compensatedActivities.push(comp.forwardActivity);
+    updateStatus('COMPENSATING');
+  }
+
+  updateStatus('ROLLED_BACK', '', trigger);
+}
+```
+
+Not every step needs a compensation.
+`verifyIncome` is a read-only lookup against the employer verification database — there is no external state to undo.
+`runCreditCheck` records a hard inquiry that lowers the applicant's score, so its compensation submits a withdrawal request.
+`orderAppraisal` books an appraiser and charges a fee — the compensation cancels the booking and issues a partial refund.
+`performTitleSearch` pays the title company and places a placeholder hold — the compensation releases the hold.
+`underwrite` reserves lending capacity against portfolio limits — the compensation returns the capacity to the pool.
+`closeLoan` is the most consequential: funds are disbursed and a lien is recorded at the county — the compensation initiates a clawback and files the lien release.
+
+Each compensation Activity is intentionally written to be idempotent.
+`withdrawCreditInquiry` simply resubmits the withdrawal request; the bureau accepts duplicates.
+`cancelAppraisal` checks for an existing booking before cancelling.
+`releaseTitleHold` is safe to call multiple times on an already-released hold.
+This means the "register before execution" discipline cannot corrupt state even if the forward Activity never produced the side effect.
+
+After the compensations finish, a `notifyApplicantCancelled` Activity runs to inform the applicant that the application was withdrawn and to surface the trigger reason.
+This step runs through the same recoverable wrapper as compensations: if the email provider is down, the Workflow pauses with `ROLLBACK_PENDING_FIX` so an operator can retry once the provider recovers rather than leaving the applicant uninformed.
 
 ### Implement the Web Service
 
@@ -685,7 +793,7 @@ npm start
 
 ### Launch the Demo Dashboard
 
-The project includes a single-page operations dashboard at `public/index.html` that exercises the web service endpoints you built above. Start it alongside the Worker:
+The project includes a single-page operations dashboard at [`public/index.html`](https://github.com/taonic/my-samples-typescript/blob/main/recoverable-activity/public/index.html) that exercises the web service endpoints you built above. Start it alongside the Worker:
 
 ```bash
 npm run web
@@ -933,12 +1041,13 @@ This provides full visibility into the lifecycle of every individual Workflow ex
 
 ## Outcomes
 
-By following this guide, you have implemented a recoverable data validation pipeline including:
+By following this guide, you have implemented a recoverable and compensatable pipeline including:
 
 - **Durable pause on permanent failure.** Activities throw `ApplicationFailure.nonRetryable()` to signal non-retryable failures — whether invalid data, a breached lending limit, or a blocked compliance check. The Workflow catches these errors and suspends using `await condition()`, consuming no Worker resources while waiting for correction. The Workflow resumes where it left off regardless of how much time passes.
 - **Signal-driven recovery.** External operators or automated agents send corrective Signals containing the field name and new value. The Signal handler patches the application data in-place, records the correction in an auditable fix history, and wakes the Workflow to retry the failed Activity.
+- **Saga compensation on abort.** When a `RollbackRequired` failure or a `cancelApplication` Signal aborts the forward pipeline, the Workflow unwinds registered compensations in LIFO order. Compensations are registered before execution and written to be idempotent so partial side effects are always cleaned up. Each compensation runs through the same recoverable wrapper, so a stuck rollback pauses with `ROLLBACK_PENDING_FIX` for operator intervention rather than leaving the process half-unwound.
 - **Search Attribute routing.** Custom Search Attributes `LoanStatus` and `FailedActivity` are updated at every state transition, creating a real-time queryable index across all active Workflows. Operations teams use visibility queries to filter blocked Workflows by failure type and route them to the appropriate resolution resource, be it human or agents.
-- **Full pipeline visibility.** Queries return the complete internal state of any running Workflow, including completed Activities, fix history, and current application data. Search Attributes provide the denormalized aggregate view across all Workflows. Together, these mechanisms give you both the individual and cross-pipeline views needed to operate the system at scale.
+- **Full pipeline visibility.** Queries return the complete internal state of any running Workflow, including completed Activities, compensated Activities, fix history, compensation history, and the triggering cancellation reason. Search Attributes provide the denormalized aggregate view across all Workflows. Together, these mechanisms give you both the individual and cross-pipeline views needed to operate the system at scale.
 
 ## Related Resources
 

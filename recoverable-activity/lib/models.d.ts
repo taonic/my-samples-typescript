@@ -9,7 +9,7 @@ export interface LoanApplication {
     loanAmount: number;
     downPayment: number;
 }
-export type LoanStatus = 'STARTED' | 'INCOME_VERIFIED' | 'CREDIT_CHECKED' | 'APPRAISAL_ORDERED' | 'TITLE_SEARCHED' | 'UNDERWRITTEN' | 'CLOSED' | 'PENDING_FIX' | 'FAILED';
+export type LoanStatus = 'STARTED' | 'INCOME_VERIFIED' | 'CREDIT_CHECKED' | 'APPRAISAL_ORDERED' | 'TITLE_SEARCHED' | 'UNDERWRITTEN' | 'CLOSED' | 'PENDING_FIX' | 'COMPENSATING' | 'ROLLBACK_PENDING_FIX' | 'ROLLED_BACK' | 'FAILED';
 export type ActivityName = 'verifyIncome' | 'runCreditCheck' | 'orderAppraisal' | 'performTitleSearch' | 'underwrite' | 'closeLoan';
 export interface FixEntry {
     activity: string;
@@ -18,16 +18,28 @@ export interface FixEntry {
     newValue: string;
     error: string;
 }
+export interface CompensationEntry {
+    forwardActivity: string;
+    compensationActivity: string;
+    result: string;
+}
 export interface LoanState {
     status: LoanStatus;
     failedActivity: string;
     failureMessage: string;
     completedActivities: string[];
+    compensatedActivities: string[];
     fixHistory: FixEntry[];
+    compensationHistory: CompensationEntry[];
     application: LoanApplication;
+    cancelReason: string;
+    notificationMessage: string;
 }
 export interface RetryUpdate {
-    key: keyof LoanApplication;
-    value: string;
+    key?: keyof LoanApplication | '';
+    value?: string;
+}
+export interface CancelRequest {
+    reason: string;
 }
 //# sourceMappingURL=models.d.ts.map
