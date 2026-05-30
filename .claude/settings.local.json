@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(temporal server:*)",
+      "Bash(temporal operator:*)",
+      "Bash(npx ts-node:*)",
+      "Bash(echo \"Worker PID: $!\")",
+      "Bash(kill 61147)",
+      "Bash(echo \"Exit code: $?\")",
+      "Bash(npm run:*)",
+      "Bash(temporal workflow:*)",
+      "Bash(python3 -c \"import json,sys; events=json.load\\(sys.stdin\\)['events']; [print\\(e['eventType']\\) for e in events]\")",
+      "Bash(kill 65418)",
+      "Bash(kill 66172)",
+      "Bash(pkill -f \"ts-node src/worker.ts\")",
+      "Bash(node -e \"const{hmacHash}=require\\('./lib/crypto'\\);console.log\\(hmacHash\\('alice@example.com'\\)\\)\")"
+    ]
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:docs.temporal.io)",
+      "Bash(npm start:*)",
+      "Bash(curl -s http://localhost:3000/api/workflows)",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s \"http://localhost:3000/api/workflows/search?failedActivity=underwrite\")",
+      "Bash(curl -s \"http://localhost:3000/api/workflows/LOAN-001\")",
+      "Bash(curl -s -X POST http://localhost:3000/api/workflows/LOAN-002/fix -H 'Content-Type: application/json' -d '{\"key\":\"ssn\",\"value\":\"222-33-4444\"}')",
+      "Bash(curl -s http://localhost:3000/api/workflows/LOAN-002)",
+      "Bash(xargs kill:*)",
+      "Read(//Users/tao/code/taonic/my-samples-typescript/**)",
+      "Bash(curl -s --max-time 10 http://localhost:3000/api/workflows)",
+      "Bash(python3 -c ':*)",
+      "mcp__claude_ai_Temporal_Docs__search_temporal_knowledge_sources",
+      "WebFetch(domain:github.com)",
+      "Read(//Users/tao/code/temporal-sa/validated-patterns-toolkit/**)",
+      "Bash(xargs ls:*)",
+      "Bash(vale /Users/tao/code/taonic/my-samples-typescript/recoverable-activity/validated-pattern.md)",
+      "Bash(grep -v \"^$\")",
+      "WebFetch(domain:www.npmjs.com)",
+      "Bash(claude mcp:*)",
+      "Bash(npx claude:*)",
+      "Read(//Users/tao/.claude/**)",
+      "Bash(ls ~/.claude/.mcp*)",
+      "Bash(ls /Users/tao/code/taonic/my-samples-typescript/.mcp*)",
+      "Bash(grep -r \"defineSearchKey\\\\|defineSearchAttribute\\\\|SearchAttributeKey\\\\|defineSearchAttributeKey\" node_modules/@temporalio/workflow/lib/*.d.ts node_modules/@temporalio/common/lib/*.d.ts)",
+      "Bash(grep -rn \"defineSearchAttributeKey\\\\|SearchAttributeUpdatePair\\\\|SearchAttributePair\" /Users/tao/code/taonic/my-samples-typescript/recoverable-activity/node_modules/@temporalio/workflow/lib/*.d.ts)",
+      "WebFetch(domain:taonic.github.io)",
+      "Bash(git stash *)"
+    ],
+    "additionalDirectories": [
+      "/Users/tao/.claude"
+    ]
+  }
+}

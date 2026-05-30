@@ -1,0 +1,17 @@
+{
+  "name": "temporal-cloud-api",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "create-namespace": "ts-node src/create-namespace.ts"
+  },
+  "dependencies": {
+    "@temporalio/client": "^1.11.1",
+    "@temporalio/cloud": "^1.15.0"
+  },
+  "devDependencies": {
+    "@types/node": "^16.11.43",
+    "ts-node": "^10.8.1",
+    "typescript": "^4.4.2"
+  }
+}
